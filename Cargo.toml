@@ -15,7 +15,7 @@ opt-level = 3
 
 [dependencies]
 bevy = "0.14.2"
-html5ever = "0.29.0"
-roxmltree = "0.20.0"
+scraper = "0.21.0"
 serde = "1.0.215"
 ureq = "2.10.1"
+url = "2.5.3"

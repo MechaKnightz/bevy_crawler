@@ -1,78 +1,84 @@
 use std::vec;
 
-use bevy::prelude::*;
+use bevy::{prelude::*, utils::hashbrown::HashSet};
 use ureq;
+use url::Url;
 
 //<>
 #[derive(Resource)]
-struct UrlsToRequest(Vec<String>);
+struct UrlsToVisit(Vec<String>);
+
+#[derive(Resource)]
+struct VisitedUrls(HashSet<String>);
 
 #[derive(Resource)]
 struct Counter(i32);
 
 fn main() {
-    let mut app = App::new();
-    app.add_systems(Update, update);
-    app.insert_resource(UrlsToRequest(vec![
-        "https://docs.kernel.org/core-api/index.html".to_string(),
-    ]));
-    app.insert_resource(Counter(0));
-    app.run();
+    App::new()
+        .add_plugins(DefaultPlugins)
+        .add_systems(Update, update)
+        .insert_resource(UrlsToVisit(vec![
+            "https://docs.kernel.org/core-api/index.html".to_string(),
+        ]))
+        .insert_resource(VisitedUrls(HashSet::default()))
+        .insert_resource(Counter(0))
+        .run();
 }
 
 fn update(
-    mut urls: ResMut<UrlsToRequest>,
+    mut urls_to_visit: ResMut<UrlsToVisit>,
+    mut visited_urls: ResMut<VisitedUrls>,
     mut counter: ResMut<Counter>,
     mut app_exit_events: ResMut<Events<bevy::app::AppExit>>,
 ) {
     let mut new_urls = vec![];
-    for url in urls.0.iter() {
-        let mut res_urls = request_url(url);
+    for url in urls_to_visit.0.iter() {
+        println!("Requesting: {}", url);
 
-        new_urls.append(&mut res_urls);
+        let res_urls = request_url(url);
+
+        new_urls.append(&mut res_urls.iter().map(|x| x.clone()).collect());
     }
-    urls.0.clear();
-    urls.0.append(&mut new_urls);
+    visited_urls.0.extend(urls_to_visit.0.clone());
+
+    urls_to_visit.0.clear();
+    urls_to_visit.0.append(&mut new_urls);
+
+    println!("Counter: {}", counter.0);
 
     counter.0 += 1;
-    if counter.0 > 10 {
+    if counter.0 > 1 {
+        visited_urls.0.iter().for_each(|url| println!("{}", url));
         app_exit_events.send(AppExit::Success);
     }
 }
 
-fn request_url(url: &str) -> Vec<String> {
+fn request_url(url: &str) -> HashSet<String> {
     let req = ureq::get(url).call();
 
     match req {
         Ok(response) => {
             if response.status() == 200 {
                 let body = response.into_string().unwrap();
-                match roxmltree::Document::parse_with_options(
-                    &body,
-                    roxmltree::ParsingOptions {
-                        allow_dtd: true,
-                        nodes_limit: u32::MAX,
-                    },
-                ) {
-                    Ok(doc) => {
-                        let new_urls: Vec<String> = doc
-                            .descendants()
-                            .filter(|n| n.has_attribute("href"))
-                            .map(|n| n.attribute("href").unwrap().to_string())
-                            .collect();
+                let link_selector = scraper::Selector::parse("[href]").unwrap();
+                let document = scraper::Html::parse_document(&body);
+                let elements_with_links = document.select(&link_selector);
 
-                        //print urls
-                        for url in new_urls.iter() {
-                            println!("{}", url);
-                        }
+                let mut new_urls: HashSet<String> = HashSet::default();
 
-                        return new_urls;
-                    }
-                    Err(e) => {
-                        println!("Error: {}", e);
-                        println!("Body: {}", body);
+                for element in elements_with_links {
+                    let href = element.value().attr("href").unwrap();
+
+                    let mut parsed_url = Url::parse(url).unwrap().join(href).unwrap();
+                    parsed_url.set_path("");
+                    let url_string = parsed_url.to_string();
+                    if !new_urls.contains(&url_string) {
+                        new_urls.insert(url_string);
                     }
                 }
+
+                return new_urls;
             } else {
                 println!("Error: {}", response.status());
             }
@@ -81,5 +87,5 @@ fn request_url(url: &str) -> Vec<String> {
             println!("Error: {}", e);
         }
     };
-    return vec![];
+    return HashSet::default();
 }
